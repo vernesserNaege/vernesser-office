@@ -4,9 +4,9 @@ from datetime import datetime
 from pathlib import Path
 import ollama
 
-from config import MODEL, THINK_AGENT, THINK_FAST
 from file_tools import read_any_file, make_docx, make_xlsx, make_pdf
 from roles import ROLES, build_system_prompt
+from settings import SETTINGS, llm_args
 
 WORKSPACE = (Path(__file__).parent.parent / "workspace").resolve()
 client = ollama.AsyncClient()
@@ -115,6 +115,32 @@ def create_pdf(file_path: str, title: str, content: str) -> str:
     return f"Created PDF: {path.relative_to(WORKSPACE)}"
 
 
+# ---------- HUMAN-IN-THE-LOOP: which actions need permission ----------
+FILE_TOOLS = {  # tool name → the extension its output_path adds (None = keep as written)
+    "write_file": None,
+    "create_word_document": ".docx",
+    "create_excel_file": ".xlsx",
+    "create_pdf": ".pdf",
+}
+
+
+def needs_confirmation(name: str, args: dict) -> str | None:
+    """Return a question if this action is risky (overwriting a file), otherwise None."""
+    if name not in FILE_TOOLS or "file_path" not in args:
+        return None
+    file_path = args["file_path"]
+    ext = FILE_TOOLS[name]
+    if ext and not file_path.lower().endswith(ext):
+        file_path += ext
+    try:
+        path = safe_path(file_path)
+    except ValueError:
+        return None  # outside the workspace: the tool itself will refuse it
+    if path.exists():
+        return f"{path.relative_to(WORKSPACE).as_posix()} already exists. Overwrite it?"
+    return None
+
+
 TOOLS = {f.__name__: f for f in [
     get_current_time, list_files, read_file, write_file,
     create_word_document, create_excel_file, create_pdf,
@@ -125,8 +151,10 @@ TOOLS = {f.__name__: f for f in [
 async def pick_role(user_input: str, current_role: str) -> tuple:
     """Ask the model which department should handle this request."""
     menu = "\n".join(f"- {name}: {r['description']}" for name, r in ROLES.items())
+    args = llm_args("fast")
+    args["options"]["temperature"] = 0   # decisions should be consistent
+
     response = await client.chat(
-        model=MODEL,
         messages=[{"role": "user", "content": f"""You route requests to the right department of an office.
 
 Departments:
@@ -146,8 +174,7 @@ Request: {user_input}"""}],
             },
             "required": ["reason", "role"],
         },
-        think=THINK_FAST,
-        options={"temperature": 0},
+        **args,
     )
     try:
         data = json.loads(response.message.content)
@@ -158,21 +185,20 @@ Request: {user_input}"""}],
 
 
 # ---------- THE AGENT LOOP ----------
-async def run_agent(messages: list, emit) -> str:
+async def run_agent(messages: list, emit, ask=None) -> str:
     error_counts = {}  # how many times each error has happened (loop guard)
 
     for step in range(10):
         await emit({"type": "state", "state": "thinking"})
         response = await client.chat(
-            model=MODEL,
             messages=messages,
             tools=list(TOOLS.values()),
-            think=THINK_AGENT,
+            **llm_args("agent"),
         )
         msg = response.message
         messages.append(msg)
 
-        # 💭 Show a short preview of the model's reasoning (gpt-oss)
+        # 💭 Show a short preview of the model's reasoning
         if getattr(msg, "thinking", None):
             await emit({"type": "reasoning", "text": msg.thinking[:250]})
 
@@ -182,11 +208,21 @@ async def run_agent(messages: list, emit) -> str:
         for call in msg.tool_calls:
             name = call.function.name
             args = call.function.arguments
-            await emit({"type": "tool", "name": name, "args": str(args)[:200]})
-            try:
-                result = TOOLS[name](**args)
-            except Exception as e:
-                result = f"Error: {e}"
+
+            # ✋ Human-in-the-loop: ask before risky actions
+            question = needs_confirmation(name, args)
+            if question and ask and not await ask(question):
+                result = (
+                    "CANCELLED: the user said NO to this action, so it was not done. "
+                    "Do not try it again. Ask the user what they want instead (for example, a different file name)."
+                )
+            else:
+                await emit({"type": "tool", "name": name, "args": str(args)[:200]})
+                try:
+                    result = TOOLS[name](**args)
+                except Exception as e:
+                    result = f"Error: {e}"
+
             await emit({"type": "tool_result", "name": name, "preview": str(result)[:300]})
             messages.append({"role": "tool", "tool_name": name, "content": str(result)})
 
@@ -212,7 +248,7 @@ class Session:
         self.messages = [{"role": "system", "content": build_system_prompt("general")}]
 
 
-async def handle_message(session: Session, user_input: str, emit, role: str = None, reason: str = "") -> str:
+async def handle_message(session: Session, user_input: str, emit, role: str = None, reason: str = "", ask=None) -> str:
     """The single entry point. If role is given, the router is skipped."""
     # Manual department control
     if user_input.startswith("/role"):
@@ -236,7 +272,7 @@ async def handle_message(session: Session, user_input: str, emit, role: str = No
     session.messages[0] = {"role": "system", "content": build_system_prompt(role)}
     session.messages.append({"role": "user", "content": user_input})
 
-    reply = await run_agent(session.messages, emit)
+    reply = await run_agent(session.messages, emit, ask)
     await emit({"type": "state", "state": "idle"})
     return reply
 
@@ -254,9 +290,14 @@ async def print_event(event: dict):
         print(f"  ↳ {event['preview'].replace(chr(10), ' ')}")
 
 
+async def terminal_ask(question: str) -> bool:
+    """Ask the user in the terminal: y = yes, anything else = no."""
+    return input(f"  ✋ {question} (y/n): ").strip().lower().startswith("y")
+
+
 async def main():
     session = Session()
-    print(f"Vernesser is ready ({MODEL}). Commands: /role <name>, /role auto, exit")
+    print(f"Vernesser is ready ({SETTINGS['model']}). Commands: /role <name>, /role auto, exit")
     print("Departments:", ", ".join(ROLES), "\n")
     while True:
         user_input = input("You: ").strip()
@@ -264,7 +305,7 @@ async def main():
             break
         if not user_input:
             continue
-        reply = await handle_message(session, user_input, print_event)
+        reply = await handle_message(session, user_input, print_event, ask=terminal_ask)
         print(f"Vernesser: {reply}\n")
 
 

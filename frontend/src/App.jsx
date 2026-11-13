@@ -3,27 +3,27 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { API, useVernesser } from "./useVernesser";
 import Office3D from "./office/Office3D";
+import SettingsPanel from "./SettingsPanel";
 import "./App.css";
 
 export default function App() {
-  const { messages, status, connected, busy, files, send, upload } =
+  const { messages, status, connected, busy, files, confirmation, send, answer, upload } =
     useVernesser();
   const [input, setInput] = useState("");
   const [dragging, setDragging] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const bottomRef = useRef(null);
 
   // The newest reply from Vernesser (for the speech bubble in 3D)
-  const lastReply = [...messages]
-    .reverse()
-    .find((m) => m.from === "vernesser")?.text;
+  const lastReply = [...messages].reverse().find((m) => m.from === "vernesser")?.text;
 
-  // Auto-scroll to the newest message
+  // Auto-scroll to the newest message (or question)
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, busy]);
+  }, [messages, busy, confirmation]);
 
   const submit = (e) => {
-    e.preventDefault(); // stop the page from reloading
+    e.preventDefault();
     send(input);
     setInput("");
   };
@@ -57,11 +57,7 @@ export default function App() {
           <h3>📁 Outputs</h3>
           {files.length === 0 && <p className="muted">No files yet</p>}
           {files.map((f) => (
-            <a
-              key={f}
-              href={`${API}/download/${encodeURI(f)}`}
-              className="file"
-            >
+            <a key={f} href={`${API}/download/${encodeURI(f)}`} className="file">
               ⬇ {f}
             </a>
           ))}
@@ -80,31 +76,54 @@ export default function App() {
       >
         <header>
           <h1>Vernesser</h1>
-          <span className={connected ? "online" : "offline"}>
-            {connected ? "● Online" : "● Offline"}
-          </span>
+          <div className="header-right">
+            <span className={connected ? "online" : "offline"}>
+              {connected ? "● Online" : "● Offline"}
+            </span>
+            <button
+              type="button"
+              className="icon-button"
+              title="Brain settings"
+              onClick={() => setShowSettings(true)}
+            >
+              ⚙️
+            </button>
+          </div>
         </header>
 
         <div className="messages">
           {messages.length === 0 && (
-            <p className="muted">
-              Give me a task, or drop a file here to get started.
-            </p>
+            <p className="muted">Give me a task, or drop a file here to get started.</p>
           )}
           {messages.map((m, i) => (
             <div key={i} className={`msg ${m.from}`}>
               {m.from === "vernesser" ? (
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {m.text}
-                </ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
               ) : (
                 m.text
               )}
             </div>
           ))}
-          {busy && (
+
+          {busy && !confirmation && (
             <div className="msg step">⏳ {status.activity || "Working..."}</div>
           )}
+
+          {/* ✋ Human-in-the-loop: Yes/No question */}
+          {confirmation && (
+            <div className="confirm">
+              <p>✋ {confirmation.question}</p>
+              <div className="confirm-buttons">
+                <button type="button" onClick={() => answer(true)}>
+                  Yes, go ahead
+                </button>
+                <button type="button" className="secondary" onClick={() => answer(false)}>
+                  No
+                </button>
+              </div>
+            </div>
+          )}
+
           <div ref={bottomRef} />
         </div>
 
@@ -116,7 +135,7 @@ export default function App() {
               hidden
               onChange={(e) => {
                 handleFile(e.target.files[0]);
-                e.target.value = ""; // allow picking the same file again
+                e.target.value = "";
               }}
             />
           </label>
@@ -124,14 +143,15 @@ export default function App() {
             className="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder={
-              busy ? "Vernesser is working..." : "Give Vernesser a task..."
-            }
+            placeholder={busy ? "Vernesser is working..." : "Give Vernesser a task..."}
             disabled={!connected}
           />
           <button disabled={busy || !connected}>Send</button>
         </form>
       </section>
+
+      {/* ---------- Settings popup ---------- */}
+      {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
     </div>
   );
 }

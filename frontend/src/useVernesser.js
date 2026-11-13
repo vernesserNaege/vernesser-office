@@ -29,8 +29,9 @@ export function useVernesser() {
   const [connected, setConnected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [files, setFiles] = useState([]);
+  const [confirmation, setConfirmation] = useState(null); // { id, question } while waiting for Yes/No
   const wsRef = useRef(null);
-  const toolHoldRef = useRef(0); // time until which the current tool visit must stay visible
+  const toolHoldRef = useRef(0);
 
   const addMessage = (from, text) => setMessages((m) => [...m, { from, text }]);
 
@@ -54,6 +55,7 @@ export function useVernesser() {
     ws.onclose = () => {
       setConnected(false);
       setBusy(false);
+      setConfirmation(null);
     };
 
     // Every event from the server lands here
@@ -81,6 +83,9 @@ export function useVernesser() {
         else apply();
       } else if (event.type === "reasoning") {
         addMessage("step", `💭 ${event.text}${event.text.length >= 250 ? "…" : ""}`);
+      } else if (event.type === "confirm") {
+        setConfirmation({ id: event.id, question: event.question });
+        setStatus((s) => ({ ...s, activity: "Waiting for your answer..." }));
       } else if (event.type === "tool") {
         const label = TOOL_LABELS[event.name] || event.name;
         toolHoldRef.current = Date.now() + TOOL_HOLD_MS;
@@ -93,6 +98,7 @@ export function useVernesser() {
       } else if (event.type === "reply") {
         addMessage("vernesser", event.text);
         setBusy(false);
+        setConfirmation(null);
         refreshFiles();
       }
     };
@@ -109,6 +115,16 @@ export function useVernesser() {
     wsRef.current.send(JSON.stringify({ message: text }));
   };
 
+  // Answer a Yes/No question
+  const answer = (approved) => {
+    if (!confirmation || wsRef.current?.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(
+      JSON.stringify({ type: "confirm_reply", id: confirmation.id, approved })
+    );
+    addMessage("step", `${approved ? "✅ You said yes" : "❌ You said no"}: ${confirmation.question}`);
+    setConfirmation(null);
+  };
+
   // Upload a file to workspace/uploads
   const upload = async (file) => {
     const form = new FormData();
@@ -119,5 +135,5 @@ export function useVernesser() {
     return data.saved;
   };
 
-  return { messages, status, connected, busy, files, send, upload };
+  return { messages, status, connected, busy, files, confirmation, send, answer, upload };
 }

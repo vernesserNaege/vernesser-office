@@ -46,3 +46,16 @@ def test_excel_tool_accepts_correct_total(workspace):
     result = agent.create_excel_file("outputs/b.xlsx", "Item,Cost\nA,100\nB,400", expected_total=500)
     assert result.startswith("Created Excel file")
     assert (workspace / "outputs" / "b.xlsx").exists()
+
+# ---------- Human-in-the-loop ----------
+def test_needs_confirmation_only_when_overwriting(workspace):
+    # A new file: safe, no question
+    assert agent.needs_confirmation("create_pdf", {"file_path": "outputs/new.pdf"}) is None
+
+    # An existing file: ask first (even when the extension is left out)
+    (workspace / "outputs" / "old.pdf").write_text("x")
+    question = agent.needs_confirmation("create_pdf", {"file_path": "outputs/old"})
+    assert "Overwrite" in question
+
+    # Reading is never risky
+    assert agent.needs_confirmation("read_file", {"file_path": "outputs/old.pdf"}) is None
