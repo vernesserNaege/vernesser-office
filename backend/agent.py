@@ -4,12 +4,13 @@ from datetime import datetime
 from pathlib import Path
 import ollama
 
+from config import MODEL, THINK_AGENT, THINK_FAST
 from file_tools import read_any_file, make_docx, make_xlsx, make_pdf
 from roles import ROLES, build_system_prompt
 
-MODEL = "qwen3:14b"
 WORKSPACE = (Path(__file__).parent.parent / "workspace").resolve()
 client = ollama.AsyncClient()
+
 
 # ---------- SAFETY ----------
 def safe_path(relative_path: str) -> Path:
@@ -55,7 +56,7 @@ def read_file(file_path: str) -> str:
 
 
 def write_file(file_path: str, content: str) -> str:
-    """Create or overwrite a plain text file (.txt, .md, .html, .csv, code files).
+    """Create or overwrite a plain text file (.txt, .md, .html, .css, .js, .csv, code files).
 
     Args:
         file_path: Path inside the workspace, e.g. "outputs/summary.md".
@@ -73,7 +74,7 @@ def create_word_document(file_path: str, title: str, content: str) -> str:
     Args:
         file_path: Where to save it, e.g. "outputs/memo.docx".
         title: The document title.
-        content: The body. Use "# " for headings, "## " for subheadings, "- " for bullet points, plain lines for paragraphs.
+        content: The body. Use "# " for headings, "## " for subheadings, "- " for bullet points, "| a | b |" lines for tables, plain lines for paragraphs.
     """
     path = output_path(file_path, ".docx")
     make_docx(path, title, content)
@@ -107,7 +108,7 @@ def create_pdf(file_path: str, title: str, content: str) -> str:
     Args:
         file_path: Where to save it, e.g. "outputs/report.pdf".
         title: The document title.
-        content: The body. Use "# " for headings, "## " for subheadings, "- " for bullet points, plain lines for paragraphs.
+        content: The body. Use "# " for headings, "## " for subheadings, "- " for bullet points, "| a | b |" lines for tables, plain lines for paragraphs.
     """
     path = output_path(file_path, ".pdf")
     make_pdf(path, title, content)
@@ -118,6 +119,7 @@ TOOLS = {f.__name__: f for f in [
     get_current_time, list_files, read_file, write_file,
     create_word_document, create_excel_file, create_pdf,
 ]}
+
 
 # ---------- THE ROUTER ----------
 async def pick_role(user_input: str, current_role: str) -> tuple:
@@ -144,26 +146,35 @@ Request: {user_input}"""}],
             },
             "required": ["reason", "role"],
         },
-        think=False,
+        think=THINK_FAST,
         options={"temperature": 0},
     )
-    data = json.loads(response.message.content)
+    try:
+        data = json.loads(response.message.content)
+    except (json.JSONDecodeError, TypeError):
+        data = {"role": "general", "reason": "router reply was unreadable, so I used the Front Desk"}
     role = data.get("role", "general")
     return (role if role in ROLES else "general"), data.get("reason", "")
 
 
 # ---------- THE AGENT LOOP ----------
 async def run_agent(messages: list, emit) -> str:
+    error_counts = {}  # how many times each error has happened (loop guard)
+
     for step in range(10):
         await emit({"type": "state", "state": "thinking"})
         response = await client.chat(
             model=MODEL,
             messages=messages,
             tools=list(TOOLS.values()),
-            think=False,
+            think=THINK_AGENT,
         )
         msg = response.message
         messages.append(msg)
+
+        # 💭 Show a short preview of the model's reasoning (gpt-oss)
+        if getattr(msg, "thinking", None):
+            await emit({"type": "reasoning", "text": msg.thinking[:250]})
 
         if not msg.tool_calls:
             return msg.content
@@ -179,23 +190,15 @@ async def run_agent(messages: list, emit) -> str:
             await emit({"type": "tool_result", "name": name, "preview": str(result)[:300]})
             messages.append({"role": "tool", "tool_name": name, "content": str(result)})
 
-        async def run_agent(messages: list, emit) -> str:
-            error_counts = {}                                   # ① how many times each error has happened
-            for step in range(10):
-                ...
-                for call in msg.tool_calls:
-                    ...
-                    messages.append({"role": "tool", "tool_name": name, "content": str(result)})
-
-                    # ② Loop guard: stop if the same error keeps happening
-                    if str(result).startswith(("ERROR", "Error")):
-                        error_counts[str(result)] = error_counts.get(str(result), 0) + 1
-                        if error_counts[str(result)] >= 3:
-                            return (
-                                "I got stuck: the same error happened 3 times in a row, so I stopped.\n\n"
-                                f"The error was: {str(result)[:200]}\n\n"
-                                "Could you rephrase the request or give me more details?"
-                            )
+            # Loop guard: stop if the same error keeps happening
+            if str(result).startswith(("ERROR", "Error")):
+                error_counts[str(result)] = error_counts.get(str(result), 0) + 1
+                if error_counts[str(result)] >= 3:
+                    return (
+                        "I got stuck: the same error happened 3 times in a row, so I stopped.\n\n"
+                        f"The error was: {str(result)[:200]}\n\n"
+                        "Could you rephrase the request or give me more details?"
+                    )
 
     return "I stopped after 10 steps to stay safe. Please break the task into smaller parts."
 
@@ -209,8 +212,8 @@ class Session:
         self.messages = [{"role": "system", "content": build_system_prompt("general")}]
 
 
-async def handle_message(session: Session, user_input: str, emit) -> str:
-    """The single entry point: terminal and server both call this."""
+async def handle_message(session: Session, user_input: str, emit, role: str = None, reason: str = "") -> str:
+    """The single entry point. If role is given, the router is skipped."""
     # Manual department control
     if user_input.startswith("/role"):
         choice = user_input.removeprefix("/role").strip()
@@ -222,10 +225,10 @@ async def handle_message(session: Session, user_input: str, emit) -> str:
             return f"Locked to {ROLES[choice]['title']}."
         return f"Unknown role. Choose: {', '.join(ROLES)}, auto"
 
-    # Pick the department
+    # Pick the department (unless someone already decided)
     if session.locked_role:
         role, reason = session.locked_role, "locked by user"
-    else:
+    elif role is None:
         role, reason = await pick_role(user_input, session.current_role)
     await emit({"type": "role", "role": role, "title": ROLES[role]["title"], "reason": reason})
 
@@ -243,6 +246,8 @@ async def print_event(event: dict):
     """How the terminal shows events."""
     if event["type"] == "role":
         print(f"  🏢 {event['title']}: {event['reason']}")
+    elif event["type"] == "reasoning":
+        print(f"  💭 {event['text'][:120]}")
     elif event["type"] == "tool":
         print(f"  🔧 {event['name']}({event['args'][:80]})")
     elif event["type"] == "tool_result":
@@ -251,7 +256,7 @@ async def print_event(event: dict):
 
 async def main():
     session = Session()
-    print("Vernesser is ready. Commands: /role <name>, /role auto, exit")
+    print(f"Vernesser is ready ({MODEL}). Commands: /role <name>, /role auto, exit")
     print("Departments:", ", ".join(ROLES), "\n")
     while True:
         user_input = input("You: ").strip()

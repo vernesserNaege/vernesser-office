@@ -6,7 +6,7 @@ const WS_URL = "ws://localhost:8000/ws";
 // How long (ms) each tool visit stays visible in the 3D office
 const TOOL_HOLD_MS = 2500;
 
-// Human-friendly names for each tool (also used for 3D animations later)
+// Human-friendly names for each tool
 const TOOL_LABELS = {
   get_current_time: "Checking the clock",
   list_files: "Looking through the files",
@@ -21,7 +21,7 @@ export function useVernesser() {
   const [messages, setMessages] = useState([]); // { from: "you" | "vernesser" | "step", text }
   const [status, setStatus] = useState({
     state: "idle",          // idle | thinking | working
-    role: "general",        // which department (matches STATIONS in layout.js)
+    role: "general",        // which department
     tool: null,             // which tool is running right now (e.g. "read_file")
     department: "Front Desk",
     activity: "",
@@ -73,15 +73,17 @@ export function useVernesser() {
           setStatus((s) => ({
             ...s,
             state: event.state,
-            tool: null, // back to the desk to think, or done
+            tool: null,
             activity: event.state === "thinking" ? "Thinking..." : "",
           }));
         const wait = toolHoldRef.current - Date.now();
-        if (wait > 0) setTimeout(apply, wait); // let him finish at the cabinet/printer first
+        if (wait > 0) setTimeout(apply, wait);
         else apply();
+      } else if (event.type === "reasoning") {
+        addMessage("step", `💭 ${event.text}${event.text.length >= 250 ? "…" : ""}`);
       } else if (event.type === "tool") {
         const label = TOOL_LABELS[event.name] || event.name;
-        toolHoldRef.current = Date.now() + TOOL_HOLD_MS; // stay visible for a while
+        toolHoldRef.current = Date.now() + TOOL_HOLD_MS;
         setStatus((s) => ({ ...s, state: "working", tool: event.name, activity: label }));
         addMessage("step", `🔧 ${label}`);
       } else if (event.type === "tool_result") {
@@ -91,12 +93,12 @@ export function useVernesser() {
       } else if (event.type === "reply") {
         addMessage("vernesser", event.text);
         setBusy(false);
-        refreshFiles(); // he may have created new files
+        refreshFiles();
       }
     };
 
     refreshFiles();
-    return () => ws.close(); // clean up when the page closes
+    return () => ws.close();
   }, [refreshFiles]);
 
   // Send a message to Vernesser
