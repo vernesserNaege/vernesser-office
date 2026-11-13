@@ -152,14 +152,23 @@ def check_rows(rows: list) -> list:
     for n, row in enumerate(rows[1:], start=2):
         if len(row) > width:
             problems.append(
-                f"Row {n} has {len(row)} cells but the header has {width} "
-                f"(probably a number written with a comma, like 15,000)."
+                f"Row {n} has {len(row)} cells but the header has {width}: {row}. "
+                f"Write numbers WITHOUT commas (1200, not 1,200)."
             )
     return problems
 
+def repair_row(row: list, width: int) -> list:
+    """Fix a number that was split by its comma: ['Contingency', '1', '200'] → ['Contingency', '1200']."""
+    if len(row) <= width:
+        return row
+    tail = row[width - 1:]                      # the last column plus the extra pieces
+    if all(cell.strip().isdigit() for cell in tail):
+        return row[:width - 1] + ["".join(cell.strip() for cell in tail)]
+    return row                                  # can't repair safely → leave it for check_rows to report
 
 def make_xlsx(path: Path, csv_text: str):
     rows = list(csv.reader(io.StringIO(csv_text.strip())))
+    rows = [rows[0]] + [repair_row(r, len(rows[0])) for r in rows[1:]]
     wb = Workbook()
     ws = wb.active
     for row in rows:

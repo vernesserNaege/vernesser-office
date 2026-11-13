@@ -1,48 +1,82 @@
-// The office floor plan.
-// position = [x, y, z] on the floor. rotation = which way the desk faces (radians).
+// ---------- The office floor plan ----------
+// Every zone has a position, a rotation (which way its FRONT faces),
+// and an offset (how far in front of it Vernesser stands).
 
-export const STATIONS = {
-  general:   { label: "Front Desk",         position: [0, 0, 3.5],  rotation: Math.PI, color: "#eab308" },
-  business:  { label: "Business & Finance", position: [-5, 0, -3],  rotation: 0,       color: "#3b82f6" },
-  hr:        { label: "Human Resources",    position: [-5, 0, 1.5], rotation: 0,       color: "#ec4899" },
-  marketing: { label: "Marketing",          position: [0, 0, -4],   rotation: 0,       color: "#f97316" },
-  web_dev:   { label: "Web Development",    position: [5, 0, -3],   rotation: 0,       color: "#22c55e" },
-  school:    { label: "School & Study",     position: [5, 0, 1.5],  rotation: 0,       color: "#a855f7" },
+export const ZONES = {
+  pc:         { label: "Workstation",    position: [0, 0, -3.6],    rotation: 0,             offset: 0.8 },
+  bookshelf:  { label: "Bookshelf",      position: [-5.5, 0, -1.8], rotation: Math.PI / 2,   offset: 0.9 },
+  whiteboard: { label: "Whiteboard",     position: [3.4, 0, -4.8],  rotation: 0,             offset: 1.1 },
+  cabinet:    { label: "Filing Cabinet", position: [-5.0, 0, -4.5], rotation: 0,             offset: 0.9 },
+  printer:    { label: "Printer",        position: [5.3, 0, -1.2],  rotation: -Math.PI / 2,  offset: 0.9 },
+  clock:      { label: "Clock",          position: [-2.4, 0, -4.9], rotation: 0,             offset: 1.0 },
+  coffee:     { label: "Coffee Corner",  position: [-5.4, 0, 2.6],  rotation: Math.PI / 2,   offset: 0.9 },
 };
 
-export const PROPS = {
-  cabinet: { label: "Filing Cabinet", position: [-7.2, 0, -5] },
-  printer: { label: "Printer",        position: [7.2, 0, 4.5] },
+// ---------- The lounge (sofa + coffee table) ----------
+export const SOFA = { position: [3.4, 0, 3.8], rotation: Math.PI }; // faces into the room
+export const COFFEE_TABLE = [3.4, 0, 2.3];
+export const SOFA_SIDE = [1.9, 0, 3.0];   // beside the table, so he walks AROUND it
+export const SOFA_FRONT = [3.4, 0, 3.0];  // between the table and the sofa
+export const SOFA_SEAT = [3.4, 0, 3.85];  // on the cushion
+
+export const LOUNGE_PATH_IN = [SOFA_SIDE, SOFA_FRONT, SOFA_SEAT];  // how to get onto the sofa
+export const LOUNGE_PATH_OUT = [SOFA_FRONT, SOFA_SIDE];            // how to get off it
+
+// Department names and their monitor colors
+export const ROLE_INFO = {
+  general:   { label: "Front Desk",         color: "#c9a66b" },
+  business:  { label: "Business & Finance", color: "#6b8fb5" },
+  hr:        { label: "Human Resources",    color: "#c48a9a" },
+  marketing: { label: "Marketing",          color: "#d08a5b" },
+  web_dev:   { label: "Web Development",    color: "#7fa37a" },
+  school:    { label: "School & Study",     color: "#9b88b8" },
 };
 
-// Which tools send Vernesser to a prop instead of his desk
-export const TOOL_PROP = {
+// Which zone each tool uses
+export const TOOL_ZONE = {
   read_file: "cabinet",
   list_files: "cabinet",
   create_pdf: "printer",
+  get_current_time: "clock",
+  write_file: "pc",
+  create_word_document: "pc",
+  create_excel_file: "pc",
 };
 
-// Where Vernesser stands when working at a desk (0.8 in front of it, rotated with the desk)
-export function deskSpot(station) {
-  const [x, , z] = station.position;
-  const r = station.rotation;
-  return [x + 0.8 * Math.sin(r), 0, z + 0.8 * Math.cos(r)];
+// Where he goes to THINK, per department (anything not listed thinks at the PC)
+export const THINK_ZONE = {
+  school: "bookshelf",
+  marketing: "whiteboard",
+};
+
+// 🧭 The single place that decides where Vernesser should be
+export function zoneFor(status) {
+  if (status.tool) return TOOL_ZONE[status.tool] || "pc";
+  if (status.state === "thinking") return THINK_ZONE[status.role] || "pc";
+  if (status.state === "working") return "pc";
+  return "lounge"; // idle → coffee, then sofa ☕🛋️
 }
 
-// Where Vernesser stands when using a prop (just in front of it)
-export function propSpot(prop) {
-  const [x, , z] = prop.position;
-  return [x, 0, z + 0.9];
-}
-
-// Turn a place (a department key or a prop key) into a job for the action queue.
-//   spot  = where to stand
-//   face  = which way to look when there (radians)
-//   dwell = minimum seconds to stay before moving on to the next job
+// One zone → one job. A job has a PATH (list of points) instead of a single spot.
 export function jobFor(key) {
-  if (PROPS[key]) {
-    return { key, spot: propSpot(PROPS[key]), face: Math.PI, dwell: 1.5 }; // look at the prop
+  const zone = ZONES[key] || ZONES.pc;
+  const [x, , z] = zone.position;
+  const r = zone.rotation;
+  return {
+    key,
+    path: [[x + zone.offset * Math.sin(r), 0, z + zone.offset * Math.cos(r)]],
+    face: r + Math.PI,
+    dwell: key === "pc" ? 0 : 1.5,
+  };
+}
+
+// A zone can create SEVERAL jobs in a row (a routine)
+export function jobsFor(key) {
+  if (key === "lounge") {
+    return [
+      { ...jobFor("coffee"), dwell: 3, pose: "sip" },                              // ☕ grab a coffee
+      { key: "sofa", path: LOUNGE_PATH_IN, face: SOFA.rotation, dwell: 0, pose: "sit" }, // 🛋️ sit down
+    ];
   }
-  const station = STATIONS[key] || STATIONS.general;
-  return { key, spot: deskSpot(station), face: station.rotation + Math.PI, dwell: 0 }; // look at the desk
+  return [jobFor(key)];
 }

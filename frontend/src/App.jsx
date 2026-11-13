@@ -6,13 +6,16 @@ import Office3D from "./office/Office3D";
 import "./App.css";
 
 export default function App() {
-  const { messages, status, connected, busy, files, send, upload } = useVernesser();
+  const { messages, status, connected, busy, files, send, upload } =
+    useVernesser();
   const [input, setInput] = useState("");
   const [dragging, setDragging] = useState(false);
   const bottomRef = useRef(null);
 
   // The newest reply from Vernesser (for the speech bubble in 3D)
-  const lastReply = [...messages].reverse().find((m) => m.from === "vernesser")?.text;
+  const lastReply = [...messages]
+    .reverse()
+    .find((m) => m.from === "vernesser")?.text;
 
   // Auto-scroll to the newest message
   useEffect(() => {
@@ -46,7 +49,7 @@ export default function App() {
           <Office3D status={status} lastReply={lastReply} />
           <div className="status-overlay">
             <strong>{status.department}</strong>
-            <span>{status.activity || "Standing by"}</span>
+            <span>{status.activity || "On a coffee break ☕"}</span>
           </div>
         </div>
 
@@ -54,7 +57,11 @@ export default function App() {
           <h3>📁 Outputs</h3>
           {files.length === 0 && <p className="muted">No files yet</p>}
           {files.map((f) => (
-            <a key={f} href={`${API}/download/${encodeURI(f)}`} className="file">
+            <a
+              key={f}
+              href={`${API}/download/${encodeURI(f)}`}
+              className="file"
+            >
               ⬇ {f}
             </a>
           ))}
@@ -80,18 +87,24 @@ export default function App() {
 
         <div className="messages">
           {messages.length === 0 && (
-            <p className="muted">Give me a task, or drop a file here to get started.</p>
+            <p className="muted">
+              Give me a task, or drop a file here to get started.
+            </p>
           )}
           {messages.map((m, i) => (
             <div key={i} className={`msg ${m.from}`}>
               {m.from === "vernesser" ? (
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {m.text}
+                </ReactMarkdown>
               ) : (
                 m.text
               )}
             </div>
           ))}
-          {busy && <div className="msg step">⏳ {status.activity || "Working..."}</div>}
+          {busy && (
+            <div className="msg step">⏳ {status.activity || "Working..."}</div>
+          )}
           <div ref={bottomRef} />
         </div>
 
@@ -111,7 +124,9 @@ export default function App() {
             className="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder={busy ? "Vernesser is working..." : "Give Vernesser a task..."}
+            placeholder={
+              busy ? "Vernesser is working..." : "Give Vernesser a task..."
+            }
             disabled={!connected}
           />
           <button disabled={busy || !connected}>Send</button>

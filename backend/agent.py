@@ -179,6 +179,24 @@ async def run_agent(messages: list, emit) -> str:
             await emit({"type": "tool_result", "name": name, "preview": str(result)[:300]})
             messages.append({"role": "tool", "tool_name": name, "content": str(result)})
 
+        async def run_agent(messages: list, emit) -> str:
+            error_counts = {}                                   # ① how many times each error has happened
+            for step in range(10):
+                ...
+                for call in msg.tool_calls:
+                    ...
+                    messages.append({"role": "tool", "tool_name": name, "content": str(result)})
+
+                    # ② Loop guard: stop if the same error keeps happening
+                    if str(result).startswith(("ERROR", "Error")):
+                        error_counts[str(result)] = error_counts.get(str(result), 0) + 1
+                        if error_counts[str(result)] >= 3:
+                            return (
+                                "I got stuck: the same error happened 3 times in a row, so I stopped.\n\n"
+                                f"The error was: {str(result)[:200]}\n\n"
+                                "Could you rephrase the request or give me more details?"
+                            )
+
     return "I stopped after 10 steps to stay safe. Please break the task into smaller parts."
 
 
