@@ -1,0 +1,24 @@
+/* ---------- The whole color palette lives here ---------- */
+:root {
+  --bg: #f5efe4;
+  --panel: #fbf8f2;
+  --panel-2: #efe6d6;
+  --border: #e4d9c6;
+  --text: #3b3026;
+  --muted: #8f8170;
+  --accent: #b07d4f;
+  --accent-dark: #8e6239;
+  --good: #5e8c5a;
+  --bad: #b5574b;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+}
+
+body {
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
